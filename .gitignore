@@ -1,0 +1,4 @@
+cmd
+slack*token
+!slack-app-token.addme
+!slack-bot-token.addme
