@@ -1,9 +1,10 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
+	"github.com/marthjod/slacksocketmodebot/listener"
+	"github.com/marthjod/slacksocketmodebot/responder"
 	"github.com/rs/zerolog"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -44,46 +45,24 @@ func main() {
 		logger.Fatal().Err(authTestErr).Msg("SLACK_BOT_TOKEN is invalid")
 	}
 
-	// TODO: integrate into struct
-	go listen(socketMode, client, logger)
+	listener := listener.New(socketMode, client, logger)
+	responder := responder.New(client, logger)
 
-	socketMode.Run()
-}
+	errChan := make(chan error)
+	eventChan := make(chan slackevents.AppMentionEvent)
 
-func listen(socketMode *socketmode.Client, webApi *slack.Client, logger zerolog.Logger) {
-	for envelope := range socketMode.Events {
-		switch envelope.Type {
-		case socketmode.EventTypeEventsAPI:
-			// Events API:
+	logger.Debug().Msg("starting event listener")
+	go listener.Listen(errChan, eventChan)
+	logger.Debug().Msg("starting responder")
+	go responder.Respond(errChan, eventChan)
 
-			// Acknowledge the eventPayload first
-			socketMode.Ack(*envelope.Request)
-
-			eventPayload, _ := envelope.Data.(slackevents.EventsAPIEvent)
-			switch eventPayload.Type {
-			case slackevents.CallbackEvent:
-				switch event := eventPayload.InnerEvent.Data.(type) {
-				case *slackevents.AppMentionEvent:
-					logger.Info().Str("user", event.User).Msgf("event text: %v", event.Text)
-
-					if _, _, err := webApi.PostMessage(
-						event.Channel,
-						slack.MsgOptionText(
-							fmt.Sprintf(":wave: <@%v>", event.User),
-							false,
-						),
-					); err != nil {
-						logger.Warn().Err(err).Msg("failed to reply")
-					}
-				default:
-					socketMode.Debugf("Skipped: %v", event)
-				}
-			default:
-				socketMode.Debugf("unsupported Events API eventPayload received")
-			}
-
-		default:
-			socketMode.Debugf("Skipped: %v", envelope.Type)
+	logger.Debug().Msg("listening for errors")
+	go func() {
+		for err := range errChan {
+			logger.Error().Err(err).Msg("received error")
 		}
-	}
+	}()
+
+	logger.Debug().Msg("starting socketmode")
+	socketMode.Run()
 }
